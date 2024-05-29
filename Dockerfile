@@ -1,5 +1,5 @@
-# Start with the official Node.js image
-FROM node:20-alpine
+# Start with the official Node.js image on a x86_64 architecture
+FROM --platform=linux/amd64 node:20-alpine
 
 # Set the working directory
 WORKDIR /app

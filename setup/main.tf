@@ -11,6 +11,15 @@ variable "AWS_REGION" {
   type = string
 }
 
+# Use S3 Bucket created as the backend for Terraform state
+terraform {
+  backend "s3" {
+    bucket = "hero-infra-terraform-state"
+    key    = "terraform.tfstate"
+    region = "eu-west-2"
+  }
+}
+
 provider "aws" {
   region = var.AWS_REGION
 }
@@ -43,8 +52,8 @@ resource "aws_iam_role_policy_attachment" "codebuild_role_attachment" {
   policy_arn = "arn:aws:iam::aws:policy/AdministratorAccess"
 }
 
-resource "aws_codebuild_project" "terraform-build" {
-  name = "terraform-build"
+resource "aws_codebuild_project" "terraform_build" {
+  name        = "terraform-build"
   description = "CodeBuild project to apply the Terraform Infrastructure"
 
   artifacts {
@@ -94,10 +103,10 @@ resource "aws_iam_role_policy_attachment" "codepipeline_role_attachment" {
 }
 
 resource "aws_s3_bucket" "terraform_artifacts" {
-  bucket_prefix = "terraform-artifacts"
+  bucket_prefix = "terraform-artifacts-"
 }
 
-resource "aws_codepipeline" "terraform-pipeline" {
+resource "aws_codepipeline" "terraform_pipeline" {
   name     = "terraform-pipeline"
   role_arn = aws_iam_role.codepipeline.arn
 
@@ -137,8 +146,147 @@ resource "aws_codepipeline" "terraform-pipeline" {
       output_artifacts = ["build_output"]
 
       configuration = {
-        ProjectName = aws_codebuild_project.terraform-build.name
+        ProjectName = aws_codebuild_project.terraform_build.name
       }
     }
+  }
+}
+
+# TO COPY OVER TO BOILERPLATE
+resource "aws_vpc" "general" {
+  cidr_block = "10.0.0.0/16"
+}
+
+resource "aws_vpc_dhcp_options" "dns" {
+  domain_name_servers = ["AmazonProvidedDNS"]
+}
+
+resource "aws_vpc_dhcp_options_association" "dns_association" {
+  vpc_id          = aws_vpc.general.id
+  dhcp_options_id = aws_vpc_dhcp_options.dns.id
+}
+
+resource "aws_subnet" "subnet" {
+  vpc_id                  = aws_vpc.general.id
+  cidr_block              = "10.0.1.0/24"
+  map_public_ip_on_launch = true
+}
+
+resource "aws_internet_gateway" "internet_gateway" {
+  vpc_id = aws_vpc.general.id
+}
+
+resource "aws_route_table" "route_table" {
+  vpc_id = aws_vpc.general.id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.internet_gateway.id
+  }
+}
+
+resource "aws_route_table_association" "route_table_association" {
+  subnet_id      = aws_subnet.subnet.id
+  route_table_id = aws_route_table.route_table.id
+}
+
+resource "aws_security_group" "ecs_security_group" {
+  name        = "ecs_security_group"
+  description = "Security group for ECS instances to allow all traffic"
+  vpc_id      = aws_vpc.general.id
+
+  # Allow all outbound traffic
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  # Allow all inbound traffic
+  ingress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+resource "aws_cloudwatch_log_group" "ecs_log_group" {
+  name = "/ecs/cluster"
+}
+
+resource "aws_ecs_cluster" "cluster" {
+  name = "cluster"
+}
+
+resource "aws_iam_role" "ecs_task_execution_role" {
+  name = "ecs_task_execution_role"
+
+  assume_role_policy = jsonencode({
+    Version   = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Sid    = ""
+        Principal = {
+          Service = "ecs-tasks.amazonaws.com"
+        }
+      },
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "ecs_task_execution_role_policy_attachment" {
+  role       = aws_iam_role.ecs_task_execution_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+}
+
+resource "aws_ecs_task_definition" "task_definition" {
+  family                   = "task_definition"
+  network_mode             = "awsvpc"
+  requires_compatibilities = ["FARGATE"]
+  cpu                      = "256"
+  memory                   = "512"
+  execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
+
+  container_definitions = jsonencode([
+    {
+      name         = "container"
+      image        = "thimovss/hero-infra:0.0.1"
+      cpu          = 256
+      memory       = 512
+      essential    = true
+      portMappings = [
+        {
+          containerPort = 80
+          hostPort      = 80
+          protocol      = "tcp"
+        }
+      ]
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          "awslogs-group"         = aws_cloudwatch_log_group.ecs_log_group.name
+          "awslogs-region"        = var.AWS_REGION
+          "awslogs-stream-prefix" = "ecs"
+        }
+      }
+    },
+  ])
+}
+
+resource "aws_ecs_service" "service" {
+  name            = "service"
+  cluster         = aws_ecs_cluster.cluster.id
+  task_definition = aws_ecs_task_definition.task_definition.arn
+  desired_count   = 1
+  launch_type     = "FARGATE"
+
+  network_configuration {
+    subnets          = [aws_subnet.subnet.id]
+    security_groups  = [aws_security_group.ecs_security_group.id]
+    assign_public_ip = true
   }
 }
