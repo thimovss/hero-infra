@@ -9,7 +9,7 @@ export default function NewProjectButton() {
         const formData = new FormData(form);
         const projectName = formData.get('project_name') as string;
         const projectId = formData.get('project_id') as string;
-        await createProject(projectName, projectId);
+        await createProject(projectName);
         //@ts-ignore
         document.getElementById('create-project-modal').close();
     }
