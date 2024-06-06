@@ -19,8 +19,8 @@ export AWS_SECRET_ACCESS_KEY
 # First, we create an S3 bucket to hold the remote terraform state
 # this will not be tracked as part of the tf state itself
 cd backend || exit
-terraform init
-terraform apply -auto-approve
+terraform init -var "AWS_REGION=$AWS_REGION"
+terraform apply -var "AWS_REGION=$AWS_REGION" -auto-approve
 cd ..
 rm -rf backend
 
@@ -28,7 +28,7 @@ rm -rf backend
 # for deploying the complete infrastructure on any changes to the git repository
 # holding the complete terraform definition
 terraform init -var "AWS_REGION=$AWS_REGION"
-terraform apply -var "AWS_REGION=$AWS_REGION" --auto-approve
+terraform apply -var "AWS_REGION=$AWS_REGION" -auto-approve
 
 # Commit the boilerplate code to the repository,
 # This will trigger the new pipeline to deploy the whole infrastructure
